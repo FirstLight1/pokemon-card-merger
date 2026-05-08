@@ -1,5 +1,5 @@
 from PIL import Image
-from pytesseract import pytesseract
+import easyocr
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -37,11 +37,22 @@ def getName(result, img):
 
     return namePlate
 
-def extractText(img):
-    img = cv2.resize(img, (200, 70))
-    custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-    text = pytesseract.image_to_string(img, config=custom_config)
-    text = text.strip().lower()
+def preprocessImage(img):
+    img = cv2.resize(img, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+
+    v_smooth = cv2.bilateralFilter(v, 7, 25, 25)
+    _, th = cv2.threshold(v_smooth, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    return th
+
+def extractText(img, reader):
+    img = preprocessImage(img)
+    cv2.imshow('extract', img)
+    cv2.waitKey()
+    text = reader.readtext(img, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', detail=0, paragraph=True)
     return text
 
 def selectFolder():
@@ -71,6 +82,7 @@ def main():
         key=lambda f: int(pattern.match(f).group(1)),
     )
     print(files)
+    reader = easyocr.Reader(['ja','en'])
     for i in range(0, len(files),2):
         pairIndex = startIndex + math.floor(i/2)
  
@@ -86,20 +98,21 @@ def main():
             for card in results:
                 
                 print(img1Path)
-                print(card.boxes)
                 flatTensor = card.boxes.xyxy[0]
                 x1,y1,x2,y2 = cardBorders(flatTensor)
 
                 crop_image = img1[y1:y2,x1:x2]
-                try:
+                #try:
+                if True:
                     cardName = findNameModel(crop_image)
 
                     namePlate = getName(cardName[0], crop_image)
-                    namePlateStr = extractText(namePlate)
+                    namePlateStr = extractText(namePlate, reader)
+                    print("output")
                     print(namePlateStr)
                     outFile = os.path.join(output, namePlateStr + f"_pair_{pairIndex}.png") 
-                except:
-                    print("Failed to get card name" + img1Path)
+                #except:
+                #    print("Failed to get card name" + img1Path)
 
 
             try:
