@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 import math
 import re
+import tcg_card_recognizer as cardRecognizer
 
 findCardModel = YOLO("findCard.pt")
 findNameModel = YOLO("findNameNumber.pt")
@@ -102,18 +103,27 @@ def main():
                 x1,y1,x2,y2 = cardBorders(flatTensor)
 
                 crop_image = img1[y1:y2,x1:x2]
+                success, encoded = cv2.imencode(".png", crop_image)
+                if not success:
+                    raise ValueError("Failed to encode crop")
+                image_bytes = encoded.tobytes()
+
+                recognizer = cardRecognizer.Recognizer() 
+                result = recognizer.recognize(image_bytes, 5)
+                print(result)
+                namePlateStr = result[0][2] + result[0][3]
+                file_name = (namePlateStr + f".png").replace(" ", "_")
+                outFile = os.path.join(output, file_name)
                 #try:
-                if True:
+                if False:
                     cardName = findNameModel(crop_image)
 
                     namePlate = getName(cardName[0], crop_image)
                     namePlateStr = extractText(namePlate, reader)
                     print("output")
                     print(namePlateStr)
-                    outFile = os.path.join(output, namePlateStr + f"_pair_{pairIndex}.png") 
                 #except:
                 #    print("Failed to get card name" + img1Path)
-
 
             try:
                 print(outFile)

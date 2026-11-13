@@ -9,5 +9,14 @@ dependencies = [
     "numpy>=2.4.4",
     "opencv-python>=4.13.0.92",
     "pillow>=12.2.0",
+    "tcg-card-recognizer",
     "ultralytics>=8.4.47",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.1",
+]
+
+[tool.uv.sources]
+tcg-card-recognizer = { git = "https://github.com/FirstLight1/tcg-card-recognizer.git" }
