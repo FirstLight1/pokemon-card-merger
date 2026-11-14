@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -144,31 +145,64 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(written), 1)
         self.assertEqual(len(errors), 1)
 
-    def test_failed_export_removes_reserved_file(self):
+    def test_partial_export_retries_only_failed_pairs(self):
+        for index in range(1, 5):
+            self.photo(f"IMG_{index}.png")
+        window = self.make_window()
+        window.output_folder = self.output
+        for row in range(2):
+            window.queue.setCurrentRow(row)
+            window.edit_name(f"Card{row}")
+            window.confirm_pair()
+        missing = window.pairs[1].back
+        missing.unlink()
+
+        def export():
+            with patch.object(QMessageBox, "exec", return_value=0):
+                window.export_pairs()
+                self.assertFalse(window.import_button.isEnabled())
+                for _ in range(200):
+                    time.sleep(0.01)
+                    self.app.processEvents()
+                    if window.thread is None:
+                        break
+                self.assertIsNone(window.thread)
+                self.assertTrue(window.import_button.isEnabled())
+
+        export()
+        self.assertTrue(window.pairs[0].exported)
+        self.assertFalse(window.pairs[1].exported)
+        self.assertEqual(len(window.last_export[1]), 1)
+        self.assertFalse((self.output / window.pairs[1].filename).exists())
+        original = (self.output / window.pairs[0].filename).read_bytes()
+        self.photo(missing.name)
+        export()
+        self.assertEqual(len(window.last_export[0]), 1)
+        self.assertEqual(window.last_export[1], [])
+        self.assertTrue(all(pair.exported for pair in window.pairs))
+        self.assertFalse(window.export_button.isEnabled())
+        self.assertEqual((self.output / window.pairs[0].filename).read_bytes(), original)
+        window.skip_pair()
+        window.skip_pair()
+        window.confirm_pair()
+        self.assertFalse(window.export_button.isEnabled())
+        window.edit_name("New name")
+        window.confirm_pair()
+        self.assertFalse(window.current_pair.exported)
+        self.assertTrue(window.export_button.isEnabled())
+        export()
+        self.assertEqual(len(window.last_export[0]), 1)
+        self.assertEqual(window.last_export[1], [])
+
+    def test_cleanup_error_counts_as_one_failed_pair(self):
         front = self.photo("IMG_1.png")
         pair = PhotoPair(1, front, self.source / "missing.png", name="Pikachu")
-        written, errors = self.run_export([pair])
-        self.assertFalse(written)
+        with patch.object(Path, "unlink", side_effect=OSError("cleanup denied")):
+            written, errors = self.run_export([pair])
+        self.assertEqual(written, [])
         self.assertEqual(len(errors), 1)
-        self.assertFalse((self.output / pair.filename).exists())
-
-    def test_background_export_restores_controls(self):
-        self.photo("IMG_1.png")
-        self.photo("IMG_2.png")
-        window = self.make_window()
-        window.edit_name("Pikachu")
-        window.confirm_pair()
-        window.output_folder = self.output
-        with patch.object(QMessageBox, "exec", return_value=0):
-            window.export_pairs()
-            self.assertFalse(window.import_button.isEnabled())
-            for _ in range(200):
-                QTest.qWait(10)
-                if window.thread is None:
-                    break
-            self.assertIsNone(window.thread)
-        self.assertTrue(window.import_button.isEnabled())
-        self.assertEqual(len(window.last_export[0]), 1)
+        self.assertIn("Cannot open", errors[0])
+        self.assertIn("cleanup denied", errors[0])
 
 
 if __name__ == "__main__":

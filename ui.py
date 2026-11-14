@@ -78,6 +78,15 @@ QListWidget::item { padding: 15px 12px; margin: 3px; border-radius: 8px; }
 QListWidget::item:selected { background: #e9efdf; color: #243128; }
 QListWidget::item:hover:!selected { background: #f2f5ee; }
 QScrollArea { border: none; }
+QScrollBar:vertical { background: #edf0e9; width: 10px; margin: 2px; border: none; border-radius: 3px; }
+QScrollBar:horizontal { background: #edf0e9; height: 10px; margin: 2px; border: none; border-radius: 3px; }
+QScrollBar::handle { background: #bdc8b6; border-radius: 3px; }
+QScrollBar::handle:vertical { min-height: 32px; }
+QScrollBar::handle:horizontal { min-width: 32px; }
+QScrollBar::handle:hover { background: #96aa89; }
+QScrollBar::handle:pressed { background: #7a9d54; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; background: transparent; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QProgressBar { border: none; background: #e1e7da; border-radius: 3px; max-height: 6px; }
 QProgressBar::chunk { background: #7a9d54; border-radius: 3px; }
 QSplitter::handle { background: #dfe5de; width: 1px; }
@@ -201,14 +210,13 @@ class ExportWorker(QObject):
                     raise OSError(output.errorString())
                 written.append(str(path))
             except Exception as exc:
+                error = f"{pair.filename}: {exc}"
                 if claimed:
                     try:
                         path.unlink(missing_ok=True)
                     except OSError as cleanup_error:
-                        errors.append(
-                            f"Could not remove incomplete file {path.name}: {cleanup_error}"
-                        )
-                errors.append(f"{pair.filename}: {exc}")
+                        error += f"\nCould not remove incomplete file {path.name}: {cleanup_error}"
+                errors.append(error)
             self.progress.emit(index, pair.filename)
         self.completed.emit(written, errors)
 
@@ -455,26 +463,31 @@ class CardMergerWindow(QMainWindow):
                     if pair.skipped
                     else "Missing back photo. Replace it or skip this pair."
                     if not pair.back
+                    else "Pair exported. Edit it to prepare another export."
+                    if pair.exported
                     else "Pair confirmed and ready to export."
                     if pair.confirmed
                     else "Verify both photos and enter the card name."
                 )
             )
         confirmed = sum(p.confirmed and not p.skipped for p in self.pairs)
+        pending = sum(p.confirmed and not p.skipped and not p.exported for p in self.pairs)
+        exported = sum(p.exported for p in self.pairs)
         skipped = sum(p.skipped for p in self.pairs)
         self.summary.setText(
-            f"{confirmed} of {len(self.pairs)} pairs confirmed · {skipped} skipped"
+            f"{confirmed} of {len(self.pairs)} pairs confirmed · {exported} exported · {skipped} skipped"
             if self.pairs
             else "Import photos to begin"
         )
         self.export_button.setText(
-            f"Export {confirmed} confirmed {'pair' if confirmed == 1 else 'pairs'}"
+            f"Export {pending} confirmed {'pair' if pending == 1 else 'pairs'}"
         )
-        self.export_button.setEnabled(bool(confirmed and self.output_folder))
+        self.export_button.setEnabled(bool(pending and self.output_folder))
 
     def edit_name(self, text: str):
         if pair := self.current_pair:
             pair.name, pair.confirmed = text, False
+            pair.exported = False
             self.refresh()
 
     def confirm_pair(self):
@@ -487,6 +500,7 @@ class CardMergerWindow(QMainWindow):
         if (pair := self.current_pair) and pair.back:
             pair.front, pair.back = pair.back, pair.front
             pair.confirmed = False
+            pair.exported = False
             self.select_pair(self.queue.currentRow())
 
     def replace_back(self):
@@ -501,6 +515,7 @@ class CardMergerWindow(QMainWindow):
         )
         if path:
             pair.back, pair.confirmed = Path(path), False
+            pair.exported = False
             self.select_pair(self.queue.currentRow())
 
     def skip_pair(self):
@@ -509,7 +524,7 @@ class CardMergerWindow(QMainWindow):
             self.refresh()
 
     def export_pairs(self):
-        pairs = [replace(p) for p in self.pairs if p.confirmed and not p.skipped]
+        pairs = [replace(p) for p in self.pairs if p.confirmed and not p.skipped and not p.exported]
         if not pairs or not self.output_folder or self.thread:
             return
         if self.input_folder and self.output_folder.resolve() == self.input_folder.resolve():
@@ -556,6 +571,10 @@ class CardMergerWindow(QMainWindow):
 
     def export_complete(self, written: list[str], errors: list[str]):
         self.last_export = (written, errors)
+        saved = {Path(path) for path in written}
+        for pair in self.pairs:
+            if self.output_folder / pair.filename in saved:
+                pair.exported = True
 
     def export_finished(self):
         self.thread = self.worker = None

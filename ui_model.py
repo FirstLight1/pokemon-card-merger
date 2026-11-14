@@ -16,6 +16,7 @@ class PhotoPair:
     confirmed: bool = False
     skipped: bool = False
     error: str = ""
+    exported: bool = False
 
     @property
     def filename(self) -> str:
@@ -32,6 +33,8 @@ class PhotoPair:
             return "Check image"
         if self.back is None:
             return "Missing back photo"
+        if self.exported:
+            return "Exported"
         return "Confirmed" if self.confirmed else "Needs review"
 
 
