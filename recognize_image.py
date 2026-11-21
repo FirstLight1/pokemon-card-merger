@@ -71,6 +71,33 @@ def getStartIndex(output):
     else:
         return 1
 
+def hash_recognize(img, img_path):
+    results = []
+    
+    try:
+        results = findCardModel(img)
+    except:
+        print("failed to find card" + img_path)
+    for card in results:
+        
+        flatTensor = card.boxes.xyxy[0]
+        x1,y1,x2,y2 = cardBorders(flatTensor)
+
+        crop_image = img[y1:y2,x1:x2]
+        success, encoded = cv2.imencode(".png", crop_image)
+        if not success:
+            raise ValueError("Failed to encode crop")
+        image_bytes = encoded.tobytes()
+
+        recognizer = cardRecognizer.Recognizer() 
+        result = recognizer.recognize(image_bytes, 5)
+        namePlateStr = result[0][2] + result[0][3]
+        file_name = (namePlateStr + f".png").replace(" ", "_")
+        return file_name
+
+
+
+
 def main():
     input, output = selectFolder()
 
@@ -92,42 +119,11 @@ def main():
             img1 = cv2.imread(img1Path)
             
             img2Path = os.path.join(input, files[i + 1])
-            try:
-                results = findCardModel(img1)
-            except:
-                print("failed to find card" + img1Path)
-            for card in results:
-                
-                print(img1Path)
-                flatTensor = card.boxes.xyxy[0]
-                x1,y1,x2,y2 = cardBorders(flatTensor)
-
-                crop_image = img1[y1:y2,x1:x2]
-                success, encoded = cv2.imencode(".png", crop_image)
-                if not success:
-                    raise ValueError("Failed to encode crop")
-                image_bytes = encoded.tobytes()
-
-                recognizer = cardRecognizer.Recognizer() 
-                result = recognizer.recognize(image_bytes, 5)
-                print(result)
-                namePlateStr = result[0][2] + result[0][3]
-                file_name = (namePlateStr + f".png").replace(" ", "_")
-                outFile = os.path.join(output, file_name)
-                #try:
-                if False:
-                    cardName = findNameModel(crop_image)
-
-                    namePlate = getName(cardName[0], crop_image)
-                    namePlateStr = extractText(namePlate, reader)
-                    print("output")
-                    print(namePlateStr)
-                #except:
-                #    print("Failed to get card name" + img1Path)
+            out_file = hash_recognize(img1, img1Path)
 
             try:
-                print(outFile)
-                subprocess.run(["magick", img1Path, img2Path, "+append", outFile], capture_output=True, text=True)
+                print(out_file)
+                subprocess.run(["magick", img1Path, img2Path, "+append", out_file], capture_output=True, text=True)
                 print("images merged succesfully")
                 #os.remove(img1Path)
                 #os.remove(img2Path)
