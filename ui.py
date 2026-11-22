@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDesktopServices,
+    QIcon,
     QImage,
     QImageReader,
     QPainter,
@@ -47,16 +48,20 @@ from PySide6.QtWidgets import (
 
 from ui_model import PhotoPair, load_pairs
 
+APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app-icon.ico"
+
 THEMES = {
     "dark": {
-        "background": "#171c19", "text": "#e4ebe2", "surface": "#222a24",
-        "border": "#38443a", "eyebrow": "#afc49f", "muted": "#a8b5aa",
-        "filename": "#bdd3ac", "photo": "#111612", "button_border": "#465341",
-        "hover": "#35442e", "hover_border": "#789365", "pressed": "#435837",
-        "focus": "#bce57a", "disabled": "#2c342d", "disabled_text": "#83907f",
-        "disabled_border": "#384039", "input_disabled": "#29312a",
-        "item_hover": "#2b352b", "scroll_track": "#202820", "scroll_handle": "#53664a",
-        "scroll_hover": "#789365", "progress": "#35442e", "accent": "#a6cb74",
+        "background": "#0E0E0E", "text": "#FFFFFF", "surface": "#181818",
+        "border": "#303030", "eyebrow": "#A3A3A3", "muted": "#A3A3A3",
+        "filename": "#A3A3A3", "photo": "#0E0E0E", "button_border": "#404040",
+        "hover": "#163323", "hover_border": "#22C55E", "pressed": "#1b4930",
+        "focus": "#22C55E", "disabled": "#262626", "disabled_text": "#A3A3A3",
+        "disabled_border": "#303030", "input_disabled": "#222222",
+        "item_hover": "#242424", "scroll_track": "#181818", "scroll_handle": "#404040",
+        "scroll_hover": "#606060", "progress": "#262626", "accent": "#22C55E",
+        "primary": "#22C55E", "primary_text": "#0E0E0E", "primary_border": "#22C55E",
+        "primary_hover": "#16a34a",
     },
     "light": {
         "background": "#f4f5f1", "text": "#243128", "surface": "#ffffff",
@@ -67,6 +72,8 @@ THEMES = {
         "disabled_border": "#e0e4dc", "input_disabled": "#ecefe8",
         "item_hover": "#f2f5ee", "scroll_track": "#edf0e9", "scroll_handle": "#bdc8b6",
         "scroll_hover": "#96aa89", "progress": "#e1e7da", "accent": "#7a9d54",
+        "primary": "#bce57a", "primary_text": "#203418", "primary_border": "#aed16f",
+        "primary_hover": "#add666",
     },
 }
 
@@ -88,8 +95,13 @@ QPushButton { background: $surface; border: 1px solid $button_border; border-rad
 QPushButton:hover { background: $hover; border-color: $hover_border; }
 QPushButton:pressed { background: $pressed; }
 QPushButton:focus, QLineEdit:focus, QListWidget:focus { border: 2px solid $focus; }
-QPushButton#primary { background: #bce57a; color: #203418; border-color: #aed16f; font-weight: 600; }
-QPushButton#primary:hover { background: #add666; }
+QPushButton#themeToggle { font-size: 22px; padding: 0px; }
+QPushButton#primary { background: $primary; color: $primary_text; border-color: $primary_border; font-weight: 600; }
+QPushButton#primary:hover { background: $primary_hover; }
+QPushButton#primary:disabled { background: $disabled; color: $disabled_text; border-color: $disabled_border; }
+QPushButton#exportButton:enabled { background: #22C55E; color: #0E0E0E; border-color: #22C55E; font-weight: 600; }
+QPushButton#exportButton:enabled:hover { background: #4ade80; }
+QPushButton#exportButton:enabled:pressed { background: #16a34a; }
 QPushButton:disabled { background: $disabled; color: $disabled_text; border-color: $disabled_border; }
 QLineEdit { background: $surface; border: 1px solid $button_border; border-radius: 7px; padding: 10px; selection-background-color: $hover; selection-color: $text; }
 QLineEdit:disabled { background: $input_disabled; color: $disabled_text; }
@@ -110,7 +122,7 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QProgressBar { border: none; background: $progress; border-radius: 3px; max-height: 6px; }
 QProgressBar::chunk { background: $accent; border-radius: 3px; }
 QSplitter::handle { background: $border; width: 1px; }
-QToolTip { background: #243128; color: #ffffff; padding: 6px; }
+QToolTip { background: $surface; color: $text; border: 1px solid $border; padding: 6px; }
 """)
 
 
@@ -315,6 +327,7 @@ class CardMergerWindow(QMainWindow):
         self.thread: QThread | None = None
         self.worker: ExportWorker | RecognitionWorker | None = None
         self.setWindowTitle("Card Merger")
+        self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.resize(1120, 800)
         self.setMinimumSize(780, 640)
         root = QWidget()
@@ -331,6 +344,8 @@ class CardMergerWindow(QMainWindow):
         row.addStretch()
         row.addWidget(label("LOCAL WORKSPACE", "eyebrow"))
         self.theme_button = button("", self.toggle_theme)
+        self.theme_button.setObjectName("themeToggle")
+        self.theme_button.setFixedSize(42, 42)
         row.addWidget(self.theme_button)
         self.set_theme("dark")
         self.import_button = button("Choose photo folder…", self.choose_input)
@@ -445,6 +460,7 @@ class CardMergerWindow(QMainWindow):
         self.summary = label("Import photos to begin", "muted", True)
         bottom.addWidget(self.summary, 1)
         self.export_button = button("Export confirmed pairs", self.export_pairs, True)
+        self.export_button.setObjectName("exportButton")
         bottom.addWidget(self.export_button)
         footer_layout.addLayout(bottom)
         self.progress = QProgressBar()
@@ -463,7 +479,7 @@ class CardMergerWindow(QMainWindow):
         self.setStyleSheet(STYLE.substitute(THEMES[theme]))
         self.theme = theme
         next_theme = "light" if theme == "dark" else "dark"
-        self.theme_button.setText(f"Switch to {next_theme} mode")
+        self.theme_button.setText("☀" if theme == "dark" else "☾")
         self.theme_button.setToolTip(f"Current theme: {theme}. Switch to {next_theme} mode.")
         self.theme_button.setAccessibleName(f"Switch to {next_theme} mode")
 
@@ -759,8 +775,14 @@ class CardMergerWindow(QMainWindow):
 
 
 def main():
+    if sys.platform == "win32":
+        import ctypes
+
+        # Keep the taskbar icon separate from the Python interpreter's icon.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PokemonCardMerger.Desktop")
     app = QApplication(sys.argv)
     app.setApplicationName("Card Merger")
+    app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     window = CardMergerWindow()
     window.show()
     sys.exit(app.exec())

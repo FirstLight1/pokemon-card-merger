@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QColor, QImage, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -80,14 +80,32 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(window.theme, "dark")
         dark_style = window.styleSheet()
         self.assertIn(THEMES["dark"]["background"], dark_style)
-        self.assertEqual(window.theme_button.text(), "Switch to light mode")
+        self.assertEqual(window.theme_button.text(), "☀")
+        self.assertEqual(THEMES["dark"]["background"], "#0E0E0E")
+        self.assertEqual(THEMES["dark"]["text"], "#FFFFFF")
+        self.assertEqual(THEMES["dark"]["muted"], "#A3A3A3")
+        self.assertEqual(THEMES["dark"]["accent"], "#22C55E")
+        self.assertEqual(THEMES["dark"]["primary"], "#22C55E")
         QTest.mouseClick(window.theme_button, Qt.MouseButton.LeftButton)
         self.assertEqual(window.theme, "light")
         self.assertIn(THEMES["light"]["background"], window.styleSheet())
         self.assertEqual(window.theme_button.accessibleName(), "Switch to dark mode")
+        self.assertEqual(window.theme_button.text(), "☾")
         QTest.mouseClick(window.theme_button, Qt.MouseButton.LeftButton)
         self.assertEqual(window.theme, "dark")
         self.assertEqual(window.styleSheet(), dark_style)
+
+    def test_window_icon_loads_outside_the_project_directory(self):
+        previous_directory = Path.cwd()
+        try:
+            os.chdir(self.folder)
+            self.window = CardMergerWindow()
+            icon = self.window.windowIcon()
+            self.assertFalse(icon.isNull())
+            sizes = {size.width() for size in icon.availableSizes()}
+            self.assertTrue({16, 32, 48, 256}.issubset(sizes))
+        finally:
+            os.chdir(previous_directory)
 
     def test_theme_switch_preserves_review_and_works_while_busy(self):
         self.photo("IMG_1.png")
@@ -107,6 +125,29 @@ class WorkspaceTests(unittest.TestCase):
             self.assertFalse(window.splitter.isEnabled())
         finally:
             window.set_busy(False)
+
+    def test_export_button_is_neon_green_only_when_export_is_available(self):
+        self.photo("IMG_1.png")
+        self.photo("IMG_2.png")
+        window = self.make_window()
+        for theme in ("dark", "light"):
+            window.set_theme(theme)
+            window.output_folder = None
+            window.refresh()
+            self.app.processEvents()
+            self.assertFalse(window.export_button.isEnabled())
+            self.assertNotEqual(
+                window.export_button.palette().color(QPalette.ColorRole.Button), QColor("#22C55E")
+            )
+            window.edit_name("Pikachu")
+            window.confirm_pair()
+            window.output_folder = self.output
+            window.refresh()
+            self.app.processEvents()
+            self.assertTrue(window.export_button.isEnabled())
+            self.assertEqual(
+                window.export_button.palette().color(QPalette.ColorRole.Button), QColor("#22C55E")
+            )
 
     def test_numeric_pairing_keeps_odd_image_and_ignores_other_files(self):
         for name in ["IMG_11.png", "IMG_2.png", "IMG_3.png"]:
