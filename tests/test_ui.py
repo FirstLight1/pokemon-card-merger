@@ -242,6 +242,7 @@ class WorkspaceTests(unittest.TestCase):
         for index in range(1, 5):
             self.photo(f"IMG_{index}.png")
         window = self.make_window()
+        window.delete_after_export.setChecked(False)
         window.output_folder = self.output
         for row in range(2):
             window.queue.setCurrentRow(row)
@@ -286,6 +287,80 @@ class WorkspaceTests(unittest.TestCase):
         export()
         self.assertEqual(len(window.last_export[0]), 1)
         self.assertEqual(window.last_export[1], [])
+
+    def test_default_export_deletes_only_successful_input_photos(self):
+        for index in range(1, 7):
+            self.photo(f"IMG_{index}.png")
+        with patch("ui.recognize_name", return_value="Pikachu"):
+            window = self.make_window()
+        self.assertTrue(window.delete_after_export.isChecked())
+        window.output_folder = self.output
+        window.pairs[2].skipped = True
+        window.pairs[1].back.write_bytes(b"broken")
+        with patch.object(QMessageBox, "exec", return_value=0):
+            window.export_pairs()
+            self.assertFalse(window.delete_after_export.isEnabled())
+            self.wait_for_worker()
+        self.assertTrue(window.delete_after_export.isEnabled())
+        self.assertTrue(window.pairs[0].exported)
+        self.assertFalse(window.pairs[0].front.exists())
+        self.assertFalse(window.pairs[0].back.exists())
+        for pair in window.pairs[1:]:
+            self.assertTrue(pair.front.exists())
+            self.assertTrue(pair.back.exists())
+        window.select_pair(0)
+        self.assertEqual(window.current_pair.status, "Exported")
+        self.assertFalse(window.current_pair.error)
+        self.assertEqual(len(window.last_export[0]), 1)
+        self.assertEqual(len(window.last_export[1]), 1)
+
+    def test_disabling_deletion_keeps_input_photos(self):
+        front, back = self.photo("IMG_1.png"), self.photo("IMG_2.png")
+        with patch("ui.recognize_name", return_value="Pikachu"):
+            window = self.make_window()
+        window.delete_after_export.setChecked(False)
+        window.output_folder = self.output
+        with patch.object(QMessageBox, "exec", return_value=0):
+            window.export_pairs()
+            self.wait_for_worker()
+        self.assertTrue(front.exists())
+        self.assertTrue(back.exists())
+
+    def test_deletion_keeps_external_replacement_and_shared_photos(self):
+        front = self.photo("IMG_1.png")
+        external = self.folder / "replacement.png"
+        external.write_bytes(front.read_bytes())
+        worker = ExportWorker([
+            PhotoPair(1, front, external, name="Pikachu"),
+            PhotoPair(2, front, external, name="Eevee"),
+        ], self.output, True, self.source)
+        worker.run()
+        self.assertEqual(worker.written_pair_indices, {1, 2})
+        self.assertFalse(front.exists())
+        self.assertTrue(external.exists())
+
+    def test_deletion_failure_preserves_successful_export(self):
+        front, back = self.photo("IMG_1.png"), self.photo("IMG_2.png")
+        worker = ExportWorker([PhotoPair(1, front, back, name="Pikachu")],
+                              self.output, True, self.source)
+        with patch.object(Path, "unlink", side_effect=PermissionError("access denied")):
+            worker.run()
+        self.assertEqual(worker.written_pair_indices, {1})
+        self.assertEqual(len(worker.cleanup_errors), 2)
+        self.assertTrue(front.exists())
+        self.assertTrue(back.exists())
+        self.assertFalse(read_image(self.output / "Pikachu.png").isNull())
+
+    def test_failed_export_protects_shared_input_photo(self):
+        front, back = self.photo("IMG_1.png"), self.photo("IMG_2.png")
+        worker = ExportWorker([
+            PhotoPair(1, front, back, name="Pikachu"),
+            PhotoPair(2, front, self.source / "missing.png", name="Eevee"),
+        ], self.output, True, self.source)
+        worker.run()
+        self.assertEqual(worker.written_pair_indices, {1})
+        self.assertTrue(front.exists())
+        self.assertFalse(back.exists())
 
     def test_cleanup_error_counts_as_one_failed_pair(self):
         front = self.photo("IMG_1.png")

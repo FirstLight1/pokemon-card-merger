@@ -14,7 +14,7 @@ The window and Windows taskbar use `assets/app-icon.ico`, with sizes from 16 to 
 
 1. Choose a folder containing JPG, PNG, WebP, BMP, or TIFF photos. Files are sorted by filename with numbers in numeric order, then grouped into consecutive front/back pairs.
 2. Card names are recognized from the front photos automatically. Complete, readable, recognized pairs are confirmed automatically. You can edit any card name to override recognition, then confirm the pair again. If recognition fails, enter the name and confirm that pair. You can also swap sides, replace a missing back, or skip pairs. Swapping sides recognizes the new front again.
-3. Choose a separate output folder and export confirmed pairs as side-by-side PNGs. Existing files are never overwritten, and original photos are preserved.
+3. Choose a separate output folder and export confirmed pairs as side-by-side PNGs. Existing files are never overwritten. **Delete input photos after successful export** is enabled by default: successfully exported originals in the input folder are permanently deleted. Uncheck it to keep originals. Failed/skipped pairs and replacement photos outside the input folder are kept; deletion problems are reported without removing the saved export.
 
 Exports use full-resolution, orientation-corrected photographs, aligned at the top with white padding if their heights differ. Preview images are reduced in size only for display. Filenames follow `{card_name}.png`, preserving Japanese characters.
 

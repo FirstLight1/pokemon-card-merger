@@ -28,6 +28,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -270,10 +271,17 @@ class ExportWorker(QObject):
     progress = Signal(int, str)
     completed = Signal(object, object)
 
-    def __init__(self, pairs: list[PhotoPair], destination: Path):
+    def __init__(self, pairs: list[PhotoPair], destination: Path,
+                 delete_after_export: bool = False, input_folder: Path | None = None,
+                 preserved_sources: tuple[Path, ...] = ()):
         super().__init__()
         self.pairs = pairs
         self.destination = destination
+        self.written_pair_indices: set[int] = set()
+        self.delete_after_export = delete_after_export
+        self.input_folder = input_folder
+        self.cleanup_errors: list[str] = []
+        self.preserved_sources = preserved_sources
 
     def run(self):
         written, errors = [], []
@@ -306,6 +314,7 @@ class ExportWorker(QObject):
                 if not output.commit():
                     raise OSError(output.errorString())
                 written.append(str(path))
+                self.written_pair_indices.add(pair.index)
             except Exception as exc:
                 error = f"{pair.filename}: {exc}"
                 if claimed:
@@ -315,6 +324,26 @@ class ExportWorker(QObject):
                         error += f"\nCould not remove incomplete file {path.name}: {cleanup_error}"
                 errors.append(error)
             self.progress.emit(index, pair.filename)
+        if self.delete_after_export and self.input_folder:
+            # Wait until all exports finish: a photo can be shared by multiple pairs.
+            protected = {
+                source.resolve()
+                for pair in self.pairs if pair.index not in self.written_pair_indices
+                for source in (pair.front, pair.back) if source
+            }
+            protected.update(source.resolve() for source in self.preserved_sources)
+            sources = {
+                source for pair in self.pairs if pair.index in self.written_pair_indices
+                for source in (pair.front, pair.back) if source
+            }
+            for source in sources:
+                if (source.parent.resolve() != self.input_folder.resolve()
+                        or source.resolve() in protected):
+                    continue
+                try:
+                    source.unlink(missing_ok=True)
+                except OSError as exc:
+                    self.cleanup_errors.append(f"Could not delete {source.name}: {exc}")
         self.completed.emit(written, errors)
 
 
@@ -404,7 +433,7 @@ class CardMergerWindow(QMainWindow):
         work.setContentsMargins(28, 10, 28, 14)
         work.setSpacing(10)
         self.notice = label(
-            "Photos stay on your computer. Original files are preserved.", "muted", True
+            "Photos stay on your computer. Check the deletion option before exporting.", "muted", True
         )
         self.notice.setAccessibleName("Pair status")
         work.addWidget(self.notice)
@@ -456,6 +485,13 @@ class CardMergerWindow(QMainWindow):
         self.output_button = button("Output folder…", self.choose_output)
         output_row.addWidget(self.output_button)
         footer_layout.addLayout(output_row)
+        self.delete_after_export = QCheckBox("Delete input photos after successful export")
+        self.delete_after_export.setChecked(True)
+        self.delete_after_export.setToolTip(
+            "Permanently delete successfully exported source photos from the input folder. "
+            "Uncheck to keep originals. Photos outside the input folder are kept."
+        )
+        footer_layout.addWidget(self.delete_after_export)
         bottom = QHBoxLayout()
         self.summary = label("Import photos to begin", "muted", True)
         bottom.addWidget(self.summary, 1)
@@ -582,7 +618,7 @@ class CardMergerWindow(QMainWindow):
             self.front.set_path(pair.front if pair else None),
             self.back.set_path(pair.back if pair else None),
         ]
-        if pair:
+        if pair and not pair.exported:
             pair.error = "\n".join(filter(None, errors))
             if pair.error:
                 pair.confirmed = False
@@ -716,7 +752,11 @@ class CardMergerWindow(QMainWindow):
         self.progress.setRange(0, len(pairs))
         self.progress.setValue(0)
         self.thread = QThread(self)
-        self.worker = ExportWorker(pairs, self.output_folder)
+        self.worker = ExportWorker(
+            pairs, self.output_folder, self.delete_after_export.isChecked(), self.input_folder,
+            tuple(source for pair in self.pairs if not pair.confirmed or pair.skipped
+                  for source in (pair.front, pair.back) if source),
+        )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.export_progress)
@@ -732,6 +772,7 @@ class CardMergerWindow(QMainWindow):
         self.import_button.setEnabled(not busy)
         self.output_button.setEnabled(not busy)
         self.export_button.setEnabled(not busy)
+        self.delete_after_export.setEnabled(not busy)
         self.progress.setVisible(busy)
 
     def export_progress(self, count: int, filename: str):
@@ -740,6 +781,7 @@ class CardMergerWindow(QMainWindow):
 
     def export_complete(self, written: list[str], errors: list[str]):
         self.last_export = (written, errors)
+        self.last_cleanup_errors = self.worker.cleanup_errors
         saved = {Path(path) for path in written}
         for pair in self.pairs:
             if self.output_folder / pair.filename in saved:
@@ -754,10 +796,17 @@ class CardMergerWindow(QMainWindow):
         message = QMessageBox(self)
         message.setWindowTitle("Export complete")
         message.setText(f"{len(written)} merged PNG files saved.\n{len(errors)} pairs failed.")
-        message.setInformativeText("Your original photos have been preserved.")
-        message.setIcon(QMessageBox.Icon.Warning if errors else QMessageBox.Icon.Information)
-        if errors:
-            message.setDetailedText("\n".join(errors))
+        message.setInformativeText(
+            "Successfully exported input photos were deleted. Photos outside the input folder were kept."
+            if self.delete_after_export.isChecked()
+            else "Your original photos have been preserved."
+        )
+        if self.last_cleanup_errors:
+            message.setInformativeText("Export saved, but some input photos could not be deleted.")
+        issues = errors + self.last_cleanup_errors
+        message.setIcon(QMessageBox.Icon.Warning if issues else QMessageBox.Icon.Information)
+        if issues:
+            message.setDetailedText("\n".join(issues))
         show_folder = message.addButton("Open output folder", QMessageBox.ButtonRole.ActionRole)
         message.addButton(QMessageBox.StandardButton.Close)
         message.exec()
