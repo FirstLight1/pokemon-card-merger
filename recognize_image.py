@@ -71,19 +71,19 @@ def getStartIndex(output):
     else:
         return 1
 
-def hash_recognize(img, img_path):
+def hash_recognize(img, img_path) -> str:
     results = []
-    
+    img = str(img)
+    image = cv2.imread(img)
     try:
-        results = findCardModel(img)
+        results = findCardModel(image)
     except:
+        raise Exception("failed to find card")
         print("failed to find card" + img_path)
     for card in results:
-        
         flatTensor = card.boxes.xyxy[0]
         x1,y1,x2,y2 = cardBorders(flatTensor)
-
-        crop_image = img[y1:y2,x1:x2]
+        crop_image = image[y1:y2,x1:x2]
         success, encoded = cv2.imencode(".png", crop_image)
         if not success:
             raise ValueError("Failed to encode crop")
@@ -109,20 +109,19 @@ def main():
         (f for f in os.listdir(input) if pattern.match(f)),
         key=lambda f: int(pattern.match(f).group(1)),
     )
-    print(files)
     reader = easyocr.Reader(['ja','en'])
     for i in range(0, len(files),2):
         pairIndex = startIndex + math.floor(i/2)
  
         if(i + 1 < len(files)):
             img1Path = os.path.join(input, files[i])
+            print(img1Path)
             img1 = cv2.imread(img1Path)
             
             img2Path = os.path.join(input, files[i + 1])
-            out_file = hash_recognize(img1, img1Path)
+            out_file = hash_recognize(img1Path, img1Path)
 
             try:
-                print(out_file)
                 subprocess.run(["magick", img1Path, img2Path, "+append", out_file], capture_output=True, text=True)
                 print("images merged succesfully")
                 #os.remove(img1Path)
