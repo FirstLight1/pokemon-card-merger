@@ -14,7 +14,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from ui import CardMergerWindow, ExportWorker, read_image
+from ui import CardMergerWindow, ExportWorker, read_image, recognize_name
 from ui_model import PhotoPair, load_pairs
 
 
@@ -31,6 +31,9 @@ class WorkspaceTests(unittest.TestCase):
         self.source.mkdir()
         self.output.mkdir()
         self.window = None
+        self.recognizer = patch("ui.recognize_name", side_effect=ValueError("No match"))
+        self.recognizer.start()
+        self.addCleanup(self.recognizer.stop)
 
     def tearDown(self):
         if self.window:
@@ -48,8 +51,16 @@ class WorkspaceTests(unittest.TestCase):
         self.window = CardMergerWindow()
         self.window.show()
         self.window.load_folder(self.source)
-        self.app.processEvents()
+        self.wait_for_worker()
         return self.window
+
+    def wait_for_worker(self):
+        for _ in range(500):
+            self.app.processEvents()
+            if self.window.thread is None:
+                return
+            time.sleep(0.01)
+        self.fail("Background worker did not finish")
 
     def run_export(self, pairs):
         worker = ExportWorker(pairs, self.output)
@@ -69,9 +80,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_filename_preserves_japanese_and_removes_unsafe_characters(self):
         pair = PhotoPair(3, Path("front.jpg"), name=' ピカチュウ / : * ? " <> | \\ ')
-        self.assertEqual(pair.filename, "ピカチュウ_pair_003.png")
+        self.assertEqual(pair.filename, "ピカチュウ.png")
         pair.name = "..."
-        self.assertEqual(pair.filename, "unknown_pair_003.png")
+        self.assertEqual(pair.filename, "unknown.png")
 
     def test_review_edit_swap_and_skip_invalidate_confirmation(self):
         self.photo("IMG_1.png")
@@ -82,6 +93,7 @@ class WorkspaceTests(unittest.TestCase):
         QTest.mouseClick(window.confirm_button, Qt.MouseButton.LeftButton)
         self.assertTrue(window.current_pair.confirmed)
         QTest.mouseClick(window.swap_button, Qt.MouseButton.LeftButton)
+        self.wait_for_worker()
         self.assertEqual(window.current_pair.front.name, "IMG_2.png")
         self.assertFalse(window.current_pair.confirmed)
         window.confirm_pair()
@@ -101,6 +113,7 @@ class WorkspaceTests(unittest.TestCase):
         window = self.make_window()
         with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
             window.load_folder(self.source)
+            self.wait_for_worker()
             self.assertEqual(window.queue.count(), 1)
             window.load_folder(self.output)
         self.assertEqual(window.queue.count(), 0)
@@ -137,7 +150,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_export_refuses_existing_file_and_continues_after_failure(self):
         front = self.photo("IMG_1.png")
         back = self.photo("IMG_2.png")
-        pairs = [PhotoPair(i, front, back, name="Pikachu", confirmed=True) for i in (1, 2)]
+        pairs = [PhotoPair(i, front, back, name=f"Pikachu{i}", confirmed=True) for i in (1, 2)]
         existing = self.output / pairs[0].filename
         existing.write_bytes(b"existing contents")
         written, errors = self.run_export(pairs)
@@ -203,6 +216,65 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Cannot open", errors[0])
         self.assertIn("cleanup denied", errors[0])
+
+    def test_recognized_pairs_are_automatically_confirmed_without_name_input(self):
+        for index in range(1, 5):
+            self.photo(f"IMG_{index}.png")
+        with patch("ui.recognize_name", side_effect=["Pikachu", "Eevee"]):
+            window = self.make_window()
+        self.assertEqual([p.name for p in window.pairs], ["Pikachu", "Eevee"])
+        self.assertTrue(all(p.confirmed for p in window.pairs))
+        self.assertTrue(window.manual_naming.isHidden())
+        self.assertIn("Pikachu", window.recognized_name.text())
+        window.edit_name("Not allowed")
+        self.assertEqual(window.current_pair.name, "Pikachu")
+        window.output_folder = self.output
+        window.refresh()
+        self.assertTrue(window.export_button.isEnabled())
+
+    def test_failed_recognition_only_shows_manual_input_for_failed_pair(self):
+        for index in range(1, 5):
+            self.photo(f"IMG_{index}.png")
+        with patch("ui.recognize_name", side_effect=["Pikachu", ValueError("No match")]):
+            window = self.make_window()
+        window.queue.setCurrentRow(1)
+        self.assertFalse(window.manual_naming.isHidden())
+        self.assertFalse(window.current_pair.confirmed)
+        QTest.keyClicks(window.name, "Eevee")
+        window.confirm_pair()
+        self.assertTrue(window.current_pair.confirmed)
+        self.assertEqual(window.current_pair.name, "Eevee")
+
+    def test_recognized_missing_or_broken_photos_are_not_confirmed(self):
+        self.photo("IMG_1.png")
+        (self.source / "IMG_2.png").write_bytes(b"broken")
+        self.photo("IMG_3.png")
+        with patch("ui.recognize_name", return_value="Pikachu"):
+            window = self.make_window()
+        self.assertTrue(all(not p.confirmed for p in window.pairs))
+        self.assertIn("Cannot open", window.pairs[0].error)
+        self.assertIsNone(window.pairs[1].back)
+
+    def test_swapping_front_reruns_recognition(self):
+        self.photo("IMG_1.png")
+        self.photo("IMG_2.png")
+        with patch("ui.recognize_name", side_effect=["Pikachu", "Eevee"]) as recognize:
+            window = self.make_window()
+            window.swap_sides()
+            self.wait_for_worker()
+        self.assertEqual(window.current_pair.name, "Eevee")
+        self.assertTrue(window.current_pair.confirmed)
+        self.assertEqual(recognize.call_args.args[0].name, "IMG_2.png")
+
+    def test_recognizer_filename_is_normalized_once(self):
+        from types import SimpleNamespace
+
+        with patch.dict("sys.modules", {"recognize_image": SimpleNamespace(
+            hash_recognize=lambda *_: "Pikachu_025.png"
+        )}):
+            name = recognize_name(Path("front.png"))
+        self.assertEqual(name, "Pikachu_025")
+        self.assertEqual(PhotoPair(1, Path("front.png"), name=name).filename, "Pikachu_025.png")
 
 
 if __name__ == "__main__":
