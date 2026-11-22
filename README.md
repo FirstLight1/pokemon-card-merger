@@ -16,6 +16,8 @@ uv run --with pyinstaller pyinstaller --clean --noconfirm pokemon-card-merger.sp
 
 The standalone executable is written to `dist/PokemonCardMerger.exe`. Use a CPU-only PyTorch installation to avoid bundling unnecessary CUDA libraries. To check the packaged UI, detector inference, and reference matching, run `PokemonCardMerger.exe --smoke-test report.json` and inspect the report.
 
+The build excludes unused dataframe, plotting, and training-only geometry libraries, and removes duplicate root DLL copies when the identical library is already bundled in its package directory. Recognition still uses the original PyTorch detector; no model conversion or accuracy changes are involved.
+
 ## Desktop UI
 
 Launch the PySide6 review workspace with [uv](https://docs.astral.sh/uv/):
