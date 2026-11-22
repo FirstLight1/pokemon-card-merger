@@ -227,16 +227,54 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(merged.pixelColor(139, 119), Qt.GlobalColor.white)
         self.assertEqual([front.read_bytes(), back.read_bytes()], originals)
 
-    def test_export_refuses_existing_file_and_continues_after_failure(self):
+    def test_export_adds_index_without_overwriting_existing_files(self):
         front = self.photo("IMG_1.png")
         back = self.photo("IMG_2.png")
         pairs = [PhotoPair(i, front, back, name=f"Pikachu{i}", confirmed=True) for i in (1, 2)]
         existing = self.output / pairs[0].filename
         existing.write_bytes(b"existing contents")
+        indexed = self.output / "Pikachu1_1.png"
+        indexed.write_bytes(b"also preserved")
         written, errors = self.run_export(pairs)
         self.assertEqual(existing.read_bytes(), b"existing contents")
-        self.assertEqual(len(written), 1)
-        self.assertEqual(len(errors), 1)
+        self.assertEqual(indexed.read_bytes(), b"also preserved")
+        self.assertEqual([Path(p).name for p in written], ["Pikachu1_2.png", "Pikachu2.png"])
+        self.assertEqual(errors, [])
+
+    def test_duplicate_names_track_successful_pairs_and_retry_failures(self):
+        for index in range(1, 5):
+            self.photo(f"IMG_{index}.png")
+        with patch("ui.recognize_name", return_value="Pikachu"):
+            window = self.make_window()
+        window.output_folder = self.output
+        existing = self.output / "Pikachu.png"
+        existing.write_bytes(b"existing contents")
+        missing = window.pairs[1].back
+        missing.unlink()
+        with patch.object(QMessageBox, "exec", return_value=0):
+            window.export_pairs()
+            self.wait_for_worker()
+            self.assertTrue(window.pairs[0].exported)
+            self.assertFalse(window.pairs[1].exported)
+            self.assertEqual(len(window.last_export[1]), 1)
+            self.assertTrue((self.output / "Pikachu_1.png").exists())
+            self.assertFalse((self.output / "Pikachu_2.png").exists())
+            self.photo(missing.name)
+            window.export_pairs()
+            self.wait_for_worker()
+        self.assertTrue(all(pair.exported for pair in window.pairs))
+        self.assertEqual(window.last_export, ([str(self.output / "Pikachu_2.png")], []))
+        self.assertEqual(existing.read_bytes(), b"existing contents")
+
+    def test_duplicate_names_in_same_batch_get_unique_filenames(self):
+        front = self.photo("IMG_1.png")
+        back = self.photo("IMG_2.png")
+        pairs = [PhotoPair(i, front, back, name="Pikachu", confirmed=True) for i in (1, 2, 3)]
+        written, errors = self.run_export(pairs)
+        self.assertEqual(errors, [])
+        self.assertEqual([Path(p).name for p in written], [
+            "Pikachu.png", "Pikachu_1.png", "Pikachu_2.png"
+        ])
 
     def test_partial_export_retries_only_failed_pairs(self):
         for index in range(1, 5):

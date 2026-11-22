@@ -289,9 +289,17 @@ class ExportWorker(QObject):
             path = self.destination / pair.filename
             claimed = False
             try:
-                # Reserve without overwriting any existing files, even after preflight.
-                with path.open("xb"):
-                    claimed = True
+                # Claim atomically so existing files and same-batch names stay safe.
+                suffix = 0
+                while True:
+                    try:
+                        with path.open("xb"):
+                            claimed = True
+                        break
+                    except FileExistsError:
+                        suffix += 1
+                        filename = Path(pair.filename)
+                        path = self.destination / f"{filename.stem}_{suffix}{filename.suffix}"
                 front, back = read_image(pair.front), read_image(pair.back)
                 merged = QImage(
                     front.width() + back.width(),
@@ -316,14 +324,14 @@ class ExportWorker(QObject):
                 written.append(str(path))
                 self.written_pair_indices.add(pair.index)
             except Exception as exc:
-                error = f"{pair.filename}: {exc}"
+                error = f"{path.name}: {exc}"
                 if claimed:
                     try:
                         path.unlink(missing_ok=True)
                     except OSError as cleanup_error:
                         error += f"\nCould not remove incomplete file {path.name}: {cleanup_error}"
                 errors.append(error)
-            self.progress.emit(index, pair.filename)
+            self.progress.emit(index, path.name)
         if self.delete_after_export and self.input_folder:
             # Wait until all exports finish: a photo can be shared by multiple pairs.
             protected = {
@@ -738,15 +746,6 @@ class CardMergerWindow(QMainWindow):
                 "Save merged cards in a separate folder so they are not imported as source photos next time.",
             )
             return
-        collisions = [p.filename for p in pairs if (self.output_folder / p.filename).exists()]
-        if collisions:
-            QMessageBox.warning(
-                self,
-                "Files already exist",
-                "Choose another output folder. Existing files will not be overwritten.\n\n"
-                + "\n".join(collisions[:10]),
-            )
-            return
         self.set_busy(True)
         self.progress.setAccessibleName("Export progress")
         self.progress.setRange(0, len(pairs))
@@ -782,9 +781,8 @@ class CardMergerWindow(QMainWindow):
     def export_complete(self, written: list[str], errors: list[str]):
         self.last_export = (written, errors)
         self.last_cleanup_errors = self.worker.cleanup_errors
-        saved = {Path(path) for path in written}
         for pair in self.pairs:
-            if self.output_folder / pair.filename in saved:
+            if pair.index in self.worker.written_pair_indices:
                 pair.exported = True
 
     def export_finished(self):
