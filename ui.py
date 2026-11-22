@@ -3,7 +3,6 @@
 import sys
 from dataclasses import replace
 from pathlib import Path
-from recognize_image import hash_recognize 
 
 from PySide6.QtCore import (
     QIODevice,
@@ -119,6 +118,51 @@ def read_image(path: Path, preview: bool = False) -> QImage:
     return image
 
 
+def recognize_name(path: Path) -> str:
+    # Load the models only in the background worker, not during UI startup.
+    from recognize_image import hash_recognize
+
+    result = hash_recognize(path, None)
+    if not isinstance(result, str) or not result.strip():
+        raise ValueError("No card name was recognized")
+    name = result.strip()
+    if name.lower().endswith(".png"):
+        name = name[:-4].strip()
+    if not name or PhotoPair(0, path, name=name).filename == "unknown.png":
+        raise ValueError("No usable card name was recognized")
+    return name
+
+
+class RecognitionWorker(QObject):
+    progress = Signal(int, object)
+    completed = Signal()
+
+    def __init__(self, pairs: list[PhotoPair]):
+        super().__init__()
+        self.pairs = pairs
+
+    def run(self):
+        for count, pair in enumerate(self.pairs, 1):
+            pair = replace(pair, name="", confirmed=False, exported=False,
+                           error="", recognition_failed=False, recognition_error="")
+            errors = []
+            for path in (pair.front, pair.back):
+                if path:
+                    try:
+                        read_image(path, preview=True)
+                    except Exception as exc:
+                        errors.append(str(exc))
+            pair.error = "\n".join(errors)
+            try:
+                pair.name = recognize_name(pair.front)
+            except Exception as exc:
+                pair.recognition_failed = True
+                pair.recognition_error = str(exc)
+            pair.confirmed = bool(pair.name and pair.back and not pair.error and not pair.skipped)
+            self.progress.emit(count, pair)
+        self.completed.emit()
+
+
 class PhotoPreview(QWidget):
     def __init__(self, side: str):
         super().__init__()
@@ -190,9 +234,6 @@ class ExportWorker(QObject):
                     max(front.height(), back.height()),
                     QImage.Format.Format_RGB32,
                 )
-                file_name = hash_recognize(pair.front, None) 
-                pair.name = file_name
-                path = self.destination / pair.filename
                 if merged.isNull():
                     raise ValueError("Not enough memory to merge these photographs")
                 merged.fill(Qt.GlobalColor.white)
@@ -228,7 +269,7 @@ class CardMergerWindow(QMainWindow):
         self.input_folder: Path | None = None
         self.output_folder: Path | None = None
         self.thread: QThread | None = None
-        self.worker: ExportWorker | None = None
+        self.worker: ExportWorker | RecognitionWorker | None = None
         self.setWindowTitle("Card Merger")
         self.resize(1120, 800)
         self.setMinimumSize(780, 640)
@@ -275,7 +316,7 @@ class CardMergerWindow(QMainWindow):
         work.setSpacing(14)
         work.addWidget(label("REVIEW & PREPARE", "eyebrow"))
         work.addWidget(label("One card. Both sides.", "title"))
-        work.addWidget(label("Check each pair, give it a name, then export.", "muted"))
+        work.addWidget(label("Names are recognized automatically. Only unrecognized cards need a name.", "muted"))
         self.preview = QFrame()
         self.preview.setObjectName("preview")
         preview_layout = QVBoxLayout(self.preview)
@@ -306,9 +347,13 @@ class CardMergerWindow(QMainWindow):
         )
         self.notice.setAccessibleName("Pair status")
         work.addWidget(self.notice)
-        name_row = QHBoxLayout()
         field = QVBoxLayout()
-        name_label = label("Card name")
+        self.recognized_name = label("", "brand", True)
+        work.addWidget(self.recognized_name)
+        self.manual_naming = QWidget()
+        name_row = QHBoxLayout(self.manual_naming)
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_label = label("Recognition failed — enter the card name")
         self.name = QLineEdit()
         self.name.setPlaceholderText("Enter the card name")
         name_label.setBuddy(self.name)
@@ -319,7 +364,7 @@ class CardMergerWindow(QMainWindow):
         name_row.addLayout(field, 1)
         self.confirm_button = button("Confirm pair", self.confirm_pair, True)
         name_row.addWidget(self.confirm_button, 0, Qt.AlignmentFlag.AlignBottom)
-        work.addLayout(name_row)
+        work.addWidget(self.manual_naming)
         self.filename = label("", "filename", True)
         work.addWidget(self.filename)
         pair_actions = QHBoxLayout()
@@ -381,6 +426,8 @@ class CardMergerWindow(QMainWindow):
             self.load_folder(Path(folder))
 
     def load_folder(self, folder: Path):
+        if self.thread:
+            return
         if self.pairs:
             answer = QMessageBox.question(
                 self,
@@ -408,6 +455,36 @@ class CardMergerWindow(QMainWindow):
             self.notice.setText(
                 "No supported photos found. Choose a folder with JPG, PNG, WebP, BMP or TIFF files."
             )
+        else:
+            self.start_recognition(pairs)
+
+    def start_recognition(self, pairs: list[PhotoPair]):
+        self.set_busy(True)
+        self.progress.setAccessibleName("Recognition progress")
+        self.progress.setRange(0, len(pairs))
+        self.progress.setValue(0)
+        self.summary.setText("Recognizing card names…")
+        self.thread = QThread(self)
+        self.worker = RecognitionWorker([replace(pair) for pair in pairs])
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self.recognition_progress)
+        self.worker.completed.connect(self.thread.quit)
+        self.worker.completed.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.finished.connect(self.recognition_finished)
+        self.thread.start()
+
+    def recognition_progress(self, count: int, pair: PhotoPair):
+        self.pairs[pair.index - 1] = pair
+        self.progress.setValue(count)
+        self.select_pair(self.queue.currentRow())
+        self.summary.setText(f"Recognizing card names… {count}/{self.progress.maximum()}")
+
+    def recognition_finished(self):
+        self.thread = self.worker = None
+        self.set_busy(False)
+        self.refresh()
 
     def choose_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -439,6 +516,10 @@ class CardMergerWindow(QMainWindow):
                 f"{item_pair.name or f'Pair {item_pair.index:03d}'}\n{item_pair.status}"
             )
         self.name.setEnabled(bool(pair) and not pair.skipped)
+        self.manual_naming.setVisible(bool(pair and pair.recognition_failed))
+        self.recognized_name.setVisible(bool(pair and not pair.recognition_failed))
+        self.recognized_name.setText(f"Recognized card: {pair.name}" if pair and pair.name else "Recognizing card name…")
+        self.name.setToolTip(pair.recognition_error if pair else "")
         self.swap_button.setEnabled(bool(pair and pair.back))
         self.replace_button.setEnabled(bool(pair))
         self.skip_button.setEnabled(bool(pair))
@@ -463,11 +544,13 @@ class CardMergerWindow(QMainWindow):
                     if pair.skipped
                     else "Missing back photo. Replace it or skip this pair."
                     if not pair.back
-                    else "Pair exported. Edit it to prepare another export."
+                    else "Pair exported."
                     if pair.exported
                     else "Pair confirmed and ready to export."
                     if pair.confirmed
-                    else "Verify both photos and enter the card name."
+                    else "Recognition failed. Enter a card name and confirm this pair."
+                    if pair.recognition_failed
+                    else "Recognizing card name…"
                 )
             )
         confirmed = sum(p.confirmed and not p.skipped for p in self.pairs)
@@ -482,10 +565,10 @@ class CardMergerWindow(QMainWindow):
         self.export_button.setText(
             f"Export {pending} confirmed {'pair' if pending == 1 else 'pairs'}"
         )
-        self.export_button.setEnabled(bool(pending and self.output_folder))
+        self.export_button.setEnabled(bool(pending and self.output_folder and not self.thread))
 
     def edit_name(self, text: str):
-        if pair := self.current_pair:
+        if (pair := self.current_pair) and pair.recognition_failed:
             pair.name, pair.confirmed = text, False
             pair.exported = False
             self.refresh()
@@ -502,6 +585,7 @@ class CardMergerWindow(QMainWindow):
             pair.confirmed = False
             pair.exported = False
             self.select_pair(self.queue.currentRow())
+            self.start_recognition([pair])
 
     def replace_back(self):
         pair = self.current_pair
@@ -517,10 +601,13 @@ class CardMergerWindow(QMainWindow):
             pair.back, pair.confirmed = Path(path), False
             pair.exported = False
             self.select_pair(self.queue.currentRow())
+            pair.confirmed = bool(pair.name.strip() and not pair.error and not pair.skipped)
+            self.refresh()
 
     def skip_pair(self):
         if pair := self.current_pair:
-            pair.skipped, pair.confirmed = not pair.skipped, False
+            pair.skipped = not pair.skipped
+            pair.confirmed = bool(not pair.skipped and pair.name.strip() and pair.back and not pair.error)
             self.refresh()
 
     def export_pairs(self):
@@ -539,11 +626,12 @@ class CardMergerWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Files already exist",
-                "Choose another output folder or change the card names. Existing files will not be overwritten.\n\n"
+                "Choose another output folder. Existing files will not be overwritten.\n\n"
                 + "\n".join(collisions[:10]),
             )
             return
         self.set_busy(True)
+        self.progress.setAccessibleName("Export progress")
         self.progress.setRange(0, len(pairs))
         self.progress.setValue(0)
         self.thread = QThread(self)
@@ -598,7 +686,7 @@ class CardMergerWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         if self.thread:
             QMessageBox.information(
-                self, "Export in progress", "Please wait for this export to finish before closing."
+                self, "Processing photos", "Please wait for processing to finish before closing."
             )
             event.ignore()
         else:

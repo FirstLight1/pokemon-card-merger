@@ -92,7 +92,7 @@ def hash_recognize(img, img_path) -> str:
         recognizer = cardRecognizer.Recognizer() 
         result = recognizer.recognize(image_bytes, 5)
         namePlateStr = result[0][2] + result[0][3]
-        file_name = (namePlateStr + f".png").replace(" ", "_")
+        file_name = (namePlateStr).replace(" ", "_")
         return file_name
 
 

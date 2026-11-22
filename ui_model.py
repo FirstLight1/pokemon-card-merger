@@ -17,6 +17,8 @@ class PhotoPair:
     skipped: bool = False
     error: str = ""
     exported: bool = False
+    recognition_failed: bool = False
+    recognition_error: str = ""
 
     @property
     def filename(self) -> str:
