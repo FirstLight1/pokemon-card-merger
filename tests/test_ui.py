@@ -5,6 +5,8 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -14,6 +16,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from recognition_backend import get_recognizer
 from ui import CardMergerWindow, ExportWorker, read_image, recognize_name
 from ui_model import PhotoPair, load_pairs
 
@@ -34,6 +37,9 @@ class WorkspaceTests(unittest.TestCase):
         self.recognizer = patch("ui.recognize_name", side_effect=ValueError("No match"))
         self.recognizer.start()
         self.addCleanup(self.recognizer.stop)
+        self.initializer = patch("ui.initialize_recognition")
+        self.initializer.start()
+        self.addCleanup(self.initializer.stop)
 
     def tearDown(self):
         if self.window:
@@ -267,14 +273,80 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(recognize.call_args.args[0].name, "IMG_2.png")
 
     def test_recognizer_filename_is_normalized_once(self):
-        from types import SimpleNamespace
-
         with patch.dict("sys.modules", {"recognize_image": SimpleNamespace(
             hash_recognize=lambda *_: "Pikachu_025.png"
         )}):
             name = recognize_name(Path("front.png"))
         self.assertEqual(name, "Pikachu_025")
         self.assertEqual(PhotoPair(1, Path("front.png"), name=name).filename, "Pikachu_025.png")
+
+    def test_hash_loading_shows_busy_bar_and_keeps_ui_events_running(self):
+        self.photo("IMG_1.png")
+        self.photo("IMG_2.png")
+        release = Event()
+
+        def initialize(report):
+            report("Loading card hashes…", 0)
+            if not release.wait(5):
+                raise TimeoutError("Test did not release initialization")
+
+        with patch("ui.initialize_recognition", side_effect=initialize), patch(
+            "ui.recognize_name", return_value="Pikachu"
+        ):
+            self.window = CardMergerWindow()
+            self.window.show()
+            self.window.load_folder(self.source)
+            try:
+                for _ in range(100):
+                    self.app.processEvents()
+                    if self.window.summary.text() == "Loading card hashes…":
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(self.window.summary.text(), "Loading card hashes…")
+                self.assertEqual(self.window.progress.maximum(), 0)
+                self.assertTrue(self.window.progress.isVisible())
+                self.assertIsNotNone(self.window.thread)
+                self.assertFalse(self.window.export_button.isEnabled())
+            finally:
+                release.set()
+                self.wait_for_worker()
+        self.assertTrue(self.window.current_pair.confirmed)
+        self.assertFalse(self.window.progress.isVisible())
+        self.assertEqual(self.window.progress.maximum(), 1)
+
+    def test_hash_loading_failure_falls_back_to_manual_names(self):
+        self.photo("IMG_1.png")
+        self.photo("IMG_2.png")
+        with patch("ui.initialize_recognition", side_effect=OSError("Database unavailable")):
+            window = self.make_window()
+        self.assertTrue(window.current_pair.recognition_failed)
+        self.assertEqual(window.current_pair.recognition_error, "Database unavailable")
+        self.assertFalse(window.manual_naming.isHidden())
+        self.assertFalse(window.progress.isVisible())
+
+    def test_hashes_are_loaded_once_and_reused_across_photos(self):
+        loads = []
+
+        class FakeRecognizer:
+            def _get_cards(self):
+                loads.append(True)
+                return ["reference hash"]
+
+            def recognize(self, image):
+                return self._get_cards()
+
+        get_recognizer.cache_clear()
+        try:
+            with patch.dict("sys.modules", {
+                "tcg_card_recognizer": SimpleNamespace(Recognizer=FakeRecognizer)
+            }):
+                recognizer = get_recognizer()
+                self.assertEqual(recognizer.recognize(b"first"), ["reference hash"])
+                self.assertEqual(recognizer.recognize(b"second"), ["reference hash"])
+                self.assertIs(get_recognizer(), recognizer)
+                self.assertEqual(len(loads), 1)
+        finally:
+            get_recognizer.cache_clear()
 
 
 if __name__ == "__main__":

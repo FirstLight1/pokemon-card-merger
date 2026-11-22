@@ -133,8 +133,20 @@ def recognize_name(path: Path) -> str:
     return name
 
 
+def initialize_recognition(report):
+    report("Loading recognition models…", 0)
+    # Importing this module loads the detection models as well as their libraries.
+    import recognize_image  # noqa: F401
+
+    report("Loading card hashes…", 0)
+    from recognition_backend import get_recognizer
+
+    get_recognizer()
+
+
 class RecognitionWorker(QObject):
     progress = Signal(int, object)
+    stage = Signal(str, int)
     completed = Signal()
 
     def __init__(self, pairs: list[PhotoPair]):
@@ -142,6 +154,12 @@ class RecognitionWorker(QObject):
         self.pairs = pairs
 
     def run(self):
+        initialization_error = ""
+        try:
+            initialize_recognition(self.stage.emit)
+        except Exception as exc:
+            initialization_error = str(exc) or type(exc).__name__
+        self.stage.emit("Recognizing card names…", len(self.pairs))
         for count, pair in enumerate(self.pairs, 1):
             pair = replace(pair, name="", confirmed=False, exported=False,
                            error="", recognition_failed=False, recognition_error="")
@@ -154,6 +172,8 @@ class RecognitionWorker(QObject):
                         errors.append(str(exc))
             pair.error = "\n".join(errors)
             try:
+                if initialization_error:
+                    raise RuntimeError(initialization_error)
                 pair.name = recognize_name(pair.front)
             except Exception as exc:
                 pair.recognition_failed = True
@@ -461,19 +481,25 @@ class CardMergerWindow(QMainWindow):
     def start_recognition(self, pairs: list[PhotoPair]):
         self.set_busy(True)
         self.progress.setAccessibleName("Recognition progress")
-        self.progress.setRange(0, len(pairs))
-        self.progress.setValue(0)
-        self.summary.setText("Recognizing card names…")
+        self.recognition_stage("Loading recognition models…", 0)
         self.thread = QThread(self)
         self.worker = RecognitionWorker([replace(pair) for pair in pairs])
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.recognition_progress)
+        self.worker.stage.connect(self.recognition_stage)
         self.worker.completed.connect(self.thread.quit)
         self.worker.completed.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.finished.connect(self.recognition_finished)
         self.thread.start()
+
+    def recognition_stage(self, message: str, total: int):
+        # A 0..0 range is Qt's animated busy bar, not a misleading percentage.
+        self.progress.setRange(0, total)
+        self.progress.setValue(0)
+        self.summary.setText(message)
+        self.notice.setText(message)
 
     def recognition_progress(self, count: int, pair: PhotoPair):
         self.pairs[pair.index - 1] = pair
