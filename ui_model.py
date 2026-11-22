@@ -23,7 +23,7 @@ class PhotoPair:
         # Portable Windows/macOS/Linux filenames, including Japanese card names.
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", self.name).strip(" .")
         name = re.sub(r"\s+", "_", name)[:100] or "unknown"
-        return f"{name}_pair_{self.index:03d}.png"
+        return f"{name}.png"
 
     @property
     def status(self) -> str:

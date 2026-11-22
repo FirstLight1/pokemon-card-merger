@@ -1,12 +1,9 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["PySide6>=6.8,<7"]
-# ///
 """Launch with `uv run ui.py`. UI runs independently of the recognition models."""
 
 import sys
 from dataclasses import replace
 from pathlib import Path
+from recognize_image import hash_recognize 
 
 from PySide6.QtCore import (
     QIODevice,
@@ -193,6 +190,9 @@ class ExportWorker(QObject):
                     max(front.height(), back.height()),
                     QImage.Format.Format_RGB32,
                 )
+                file_name = hash_recognize(pair.front, None) 
+                pair.name = file_name
+                path = self.destination / pair.filename
                 if merged.isNull():
                     raise ValueError("Not enough memory to merge these photographs")
                 merged.fill(Qt.GlobalColor.white)
