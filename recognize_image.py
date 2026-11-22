@@ -1,5 +1,4 @@
 from PIL import Image
-import easyocr
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -12,7 +11,6 @@ import re
 from recognition_backend import get_recognizer
 
 findCardModel = YOLO("findCard.pt")
-findNameModel = YOLO("findNameNumber.pt")
 
 names = {
     0: "Name",
@@ -26,35 +24,6 @@ def cardBorders(result):
     y2 = result[3]
     return int(x1), int(y1), int(x2), int(y2)
 
-def getName(result, img):
-    boxes = result.boxes.xyxy
-    class_ids = result.boxes.cls
-
-    for box, cls_id in zip(boxes, class_ids):
-        class_name = names[int(cls_id)]
-        if class_name.lower() == "name":
-            x1, y1, x2, y2 = cardBorders(box)
-            namePlate = img[y1:y2, x1:x2]
-
-    return namePlate
-
-def preprocessImage(img):
-    img = cv2.resize(img, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
-
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-
-    v_smooth = cv2.bilateralFilter(v, 7, 25, 25)
-    _, th = cv2.threshold(v_smooth, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-    return th
-
-def extractText(img, reader):
-    img = preprocessImage(img)
-    cv2.imshow('extract', img)
-    cv2.waitKey()
-    text = reader.readtext(img, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', detail=0, paragraph=True)
-    return text
 
 def selectFolder():
     inputFolder = r"C:\Users\kamen\Pictures\cardinput"
@@ -95,9 +64,6 @@ def hash_recognize(img, img_path) -> str:
         file_name = (namePlateStr).replace(" ", "_")
         return file_name
 
-
-
-
 def main():
     input, output = selectFolder()
 
@@ -109,7 +75,6 @@ def main():
         (f for f in os.listdir(input) if pattern.match(f)),
         key=lambda f: int(pattern.match(f).group(1)),
     )
-    reader = easyocr.Reader(['ja','en'])
     for i in range(0, len(files),2):
         pairIndex = startIndex + math.floor(i/2)
  
