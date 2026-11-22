@@ -18,6 +18,8 @@ Exports use full-resolution, orientation-corrected photographs, aligned at the t
 
 Recognition uses `recognize_image.py`; failures (including unavailable models) fall back to manual naming. Export uses the displayed name without running recognition again. Review state lasts for the current session.
 
+The progress bar animates while recognition models and card hashes load, then tracks completed pairs. Reference hashes are cached in memory and reused across photos and folder imports until the app closes.
+
 Run the UI checks after installing PySide6:
 
 ```sh

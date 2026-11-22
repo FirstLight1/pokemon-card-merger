@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 import math
 import re
-import tcg_card_recognizer as cardRecognizer
+from recognition_backend import get_recognizer
 
 findCardModel = YOLO("findCard.pt")
 findNameModel = YOLO("findNameNumber.pt")
@@ -89,7 +89,7 @@ def hash_recognize(img, img_path) -> str:
             raise ValueError("Failed to encode crop")
         image_bytes = encoded.tobytes()
 
-        recognizer = cardRecognizer.Recognizer() 
+        recognizer = get_recognizer()
         result = recognizer.recognize(image_bytes, 5)
         namePlateStr = result[0][2] + result[0][3]
         file_name = (namePlateStr).replace(" ", "_")
