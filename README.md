@@ -1,5 +1,21 @@
 # Pokémon Card Merger
 
+## Windows download
+
+Download `PokemonCardMerger.exe` from [GitHub Releases](https://github.com/FirstLight1/pokemon-card-merger/releases/latest) and double-click it. No Python installation is required. The first launch may take a moment while bundled libraries are extracted. The executable is unsigned, so Windows may display a SmartScreen warning.
+
+The executable includes the card detector (`findCard.pt`) and reference-hash database; the unused name/number detector and OCR models are not bundled. Diagnostic logs are saved to `%LOCALAPPDATA%\PokemonCardMerger\app.log`.
+
+### Build the Windows executable
+
+On Windows, install dependencies with `uv sync`, then run:
+
+```sh
+uv run --with pyinstaller pyinstaller --clean --noconfirm pokemon-card-merger.spec
+```
+
+The standalone executable is written to `dist/PokemonCardMerger.exe`. Use a CPU-only PyTorch installation to avoid bundling unnecessary CUDA libraries. To check the packaged UI, detector inference, and reference matching, run `PokemonCardMerger.exe --smoke-test report.json` and inspect the report.
+
 ## Desktop UI
 
 Launch the PySide6 review workspace with [uv](https://docs.astral.sh/uv/):

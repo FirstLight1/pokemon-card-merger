@@ -10,7 +10,7 @@ import math
 import re
 from recognition_backend import get_recognizer
 
-findCardModel = YOLO("findCard.pt")
+findCardModel = YOLO(str(Path(__file__).resolve().parent / "findCard.pt"))
 
 names = {
     0: "Name",
