@@ -17,7 +17,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from recognition_backend import get_recognizer
-from ui import CardMergerWindow, ExportWorker, read_image, recognize_name
+from ui import THEMES, CardMergerWindow, ExportWorker, read_image, recognize_name
 from ui_model import PhotoPair, load_pairs
 
 
@@ -74,6 +74,39 @@ class WorkspaceTests(unittest.TestCase):
         worker.completed.connect(lambda written, errors: results.extend([written, errors]))
         worker.run()
         return results
+
+    def test_dark_theme_is_default_and_button_switches_both_ways(self):
+        window = self.make_window()
+        self.assertEqual(window.theme, "dark")
+        dark_style = window.styleSheet()
+        self.assertIn(THEMES["dark"]["background"], dark_style)
+        self.assertEqual(window.theme_button.text(), "Switch to light mode")
+        QTest.mouseClick(window.theme_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.theme, "light")
+        self.assertIn(THEMES["light"]["background"], window.styleSheet())
+        self.assertEqual(window.theme_button.accessibleName(), "Switch to dark mode")
+        QTest.mouseClick(window.theme_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(window.theme, "dark")
+        self.assertEqual(window.styleSheet(), dark_style)
+
+    def test_theme_switch_preserves_review_and_works_while_busy(self):
+        self.photo("IMG_1.png")
+        self.photo("IMG_2.png")
+        window = self.make_window()
+        QTest.keyClicks(window.name, "Pikachu")
+        window.confirm_pair()
+        pair = window.current_pair
+        window.set_busy(True)
+        try:
+            self.assertTrue(window.theme_button.isEnabled())
+            QTest.mouseClick(window.theme_button, Qt.MouseButton.LeftButton)
+            self.assertEqual(window.theme, "light")
+            self.assertIs(window.current_pair, pair)
+            self.assertEqual(window.name.text(), "Pikachu")
+            self.assertTrue(pair.confirmed)
+            self.assertFalse(window.splitter.isEnabled())
+        finally:
+            window.set_busy(False)
 
     def test_numeric_pairing_keeps_odd_image_and_ignores_other_files(self):
         for name in ["IMG_11.png", "IMG_2.png", "IMG_3.png"]:
@@ -230,15 +263,38 @@ class WorkspaceTests(unittest.TestCase):
             window = self.make_window()
         self.assertEqual([p.name for p in window.pairs], ["Pikachu", "Eevee"])
         self.assertTrue(all(p.confirmed for p in window.pairs))
-        self.assertTrue(window.manual_naming.isHidden())
+        self.assertFalse(window.manual_naming.isHidden())
         self.assertIn("Pikachu", window.recognized_name.text())
-        window.edit_name("Not allowed")
-        self.assertEqual(window.current_pair.name, "Pikachu")
         window.output_folder = self.output
         window.refresh()
         self.assertTrue(window.export_button.isEnabled())
 
-    def test_failed_recognition_only_shows_manual_input_for_failed_pair(self):
+    def test_recognized_name_can_be_overridden_and_exported_after_confirmation(self):
+        for index in range(1, 5):
+            self.photo(f"IMG_{index}.png")
+        with patch("ui.recognize_name", side_effect=["Pikachu", "Eevee"]):
+            window = self.make_window()
+        window.output_folder = self.output
+        window.current_pair.exported = True
+        window.name.selectAll()
+        QTest.keyClicks(window.name, "Raichu")
+        pair = window.current_pair
+        self.assertEqual(pair.name, "Raichu")
+        self.assertFalse(pair.confirmed)
+        self.assertFalse(pair.exported)
+        self.assertIn("Confirm this pair", window.notice.text())
+        self.assertEqual(window.filename.text(), "Raichu.png")
+        self.assertIn("Raichu", window.queue.item(0).text())
+        window.queue.setCurrentRow(1)
+        window.queue.setCurrentRow(0)
+        self.assertEqual(window.name.text(), "Raichu")
+        QTest.mouseClick(window.confirm_button, Qt.MouseButton.LeftButton)
+        self.assertTrue(pair.confirmed)
+        written, errors = self.run_export([pair])
+        self.assertEqual(errors, [])
+        self.assertEqual(written, [str(self.output / "Raichu.png")])
+
+    def test_failed_recognition_shows_manual_input_for_failed_pair(self):
         for index in range(1, 5):
             self.photo(f"IMG_{index}.png")
         with patch("ui.recognize_name", side_effect=["Pikachu", ValueError("No match")]):

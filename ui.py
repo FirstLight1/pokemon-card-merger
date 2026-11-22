@@ -3,6 +3,7 @@
 import sys
 from dataclasses import replace
 from pathlib import Path
+from string import Template
 
 from PySide6.QtCore import (
     QIODevice,
@@ -46,48 +47,71 @@ from PySide6.QtWidgets import (
 
 from ui_model import PhotoPair, load_pairs
 
-STYLE = """
-QWidget { background: #f4f5f1; color: #243128; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
-QMainWindow { background: #f4f5f1; }
-QFrame#header, QFrame#sidebar, QFrame#preview { background: #ffffff; }
-QFrame#header { border-bottom: 1px solid #dfe5de; }
-QFrame#sidebar { border-right: 1px solid #dfe5de; }
-QFrame#preview { border: 1px solid #dfe5de; border-radius: 12px; }
+THEMES = {
+    "dark": {
+        "background": "#171c19", "text": "#e4ebe2", "surface": "#222a24",
+        "border": "#38443a", "eyebrow": "#afc49f", "muted": "#a8b5aa",
+        "filename": "#bdd3ac", "photo": "#111612", "button_border": "#465341",
+        "hover": "#35442e", "hover_border": "#789365", "pressed": "#435837",
+        "focus": "#bce57a", "disabled": "#2c342d", "disabled_text": "#83907f",
+        "disabled_border": "#384039", "input_disabled": "#29312a",
+        "item_hover": "#2b352b", "scroll_track": "#202820", "scroll_handle": "#53664a",
+        "scroll_hover": "#789365", "progress": "#35442e", "accent": "#a6cb74",
+    },
+    "light": {
+        "background": "#f4f5f1", "text": "#243128", "surface": "#ffffff",
+        "border": "#dfe5de", "eyebrow": "#65725f", "muted": "#68736b",
+        "filename": "#53634f", "photo": "#e9ece5", "button_border": "#d4ddd1",
+        "hover": "#e9efdf", "hover_border": "#a6ba99", "pressed": "#dce8d0",
+        "focus": "#719553", "disabled": "#e8eae4", "disabled_text": "#8a9388",
+        "disabled_border": "#e0e4dc", "input_disabled": "#ecefe8",
+        "item_hover": "#f2f5ee", "scroll_track": "#edf0e9", "scroll_handle": "#bdc8b6",
+        "scroll_hover": "#96aa89", "progress": "#e1e7da", "accent": "#7a9d54",
+    },
+}
+
+STYLE = Template("""
+QWidget { background: $background; color: $text; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+QMainWindow { background: $background; }
+QFrame#header, QFrame#sidebar, QFrame#preview { background: $surface; }
+QFrame#header { border-bottom: 1px solid $border; }
+QFrame#sidebar { border-right: 1px solid $border; }
+QFrame#preview { border: 1px solid $border; border-radius: 12px; }
 QLabel { background: transparent; }
 QLabel#brand { font-size: 18px; font-weight: 600; }
 QLabel#title { font-size: 29px; font-weight: 600; }
-QLabel#eyebrow { font-size: 11px; font-weight: 600; color: #65725f; }
-QLabel#muted { color: #68736b; font-size: 12px; }
-QLabel#filename { color: #53634f; font-family: monospace; font-size: 12px; }
-QLabel#photo { background: #e9ece5; border-radius: 8px; color: #68736b; padding: 8px; }
-QPushButton { background: #ffffff; border: 1px solid #d4ddd1; border-radius: 7px; padding: 10px 15px; }
-QPushButton:hover { background: #e9efdf; border-color: #a6ba99; }
-QPushButton:pressed { background: #dce8d0; }
-QPushButton:focus, QLineEdit:focus, QListWidget:focus { border: 2px solid #719553; }
+QLabel#eyebrow { font-size: 11px; font-weight: 600; color: $eyebrow; }
+QLabel#muted { color: $muted; font-size: 12px; }
+QLabel#filename { color: $filename; font-family: monospace; font-size: 12px; }
+QLabel#photo { background: $photo; border-radius: 8px; color: $muted; padding: 8px; }
+QPushButton { background: $surface; border: 1px solid $button_border; border-radius: 7px; padding: 10px 15px; }
+QPushButton:hover { background: $hover; border-color: $hover_border; }
+QPushButton:pressed { background: $pressed; }
+QPushButton:focus, QLineEdit:focus, QListWidget:focus { border: 2px solid $focus; }
 QPushButton#primary { background: #bce57a; color: #203418; border-color: #aed16f; font-weight: 600; }
 QPushButton#primary:hover { background: #add666; }
-QPushButton:disabled { background: #e8eae4; color: #8a9388; border-color: #e0e4dc; }
-QLineEdit { background: #ffffff; border: 1px solid #d4ddd1; border-radius: 7px; padding: 10px; }
-QLineEdit:disabled { background: #ecefe8; color: #8a9388; }
-QListWidget { background: #ffffff; border: none; padding: 4px; outline: none; }
+QPushButton:disabled { background: $disabled; color: $disabled_text; border-color: $disabled_border; }
+QLineEdit { background: $surface; border: 1px solid $button_border; border-radius: 7px; padding: 10px; selection-background-color: $hover; selection-color: $text; }
+QLineEdit:disabled { background: $input_disabled; color: $disabled_text; }
+QListWidget { background: $surface; border: none; padding: 4px; outline: none; }
 QListWidget::item { padding: 15px 12px; margin: 3px; border-radius: 8px; }
-QListWidget::item:selected { background: #e9efdf; color: #243128; }
-QListWidget::item:hover:!selected { background: #f2f5ee; }
+QListWidget::item:selected { background: $hover; color: $text; }
+QListWidget::item:hover:!selected { background: $item_hover; }
 QScrollArea { border: none; }
-QScrollBar:vertical { background: #edf0e9; width: 10px; margin: 2px; border: none; border-radius: 3px; }
-QScrollBar:horizontal { background: #edf0e9; height: 10px; margin: 2px; border: none; border-radius: 3px; }
-QScrollBar::handle { background: #bdc8b6; border-radius: 3px; }
+QScrollBar:vertical { background: $scroll_track; width: 10px; margin: 2px; border: none; border-radius: 3px; }
+QScrollBar:horizontal { background: $scroll_track; height: 10px; margin: 2px; border: none; border-radius: 3px; }
+QScrollBar::handle { background: $scroll_handle; border-radius: 3px; }
 QScrollBar::handle:vertical { min-height: 32px; }
 QScrollBar::handle:horizontal { min-width: 32px; }
-QScrollBar::handle:hover { background: #96aa89; }
-QScrollBar::handle:pressed { background: #7a9d54; }
+QScrollBar::handle:hover { background: $scroll_hover; }
+QScrollBar::handle:pressed { background: $accent; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: none; background: transparent; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-QProgressBar { border: none; background: #e1e7da; border-radius: 3px; max-height: 6px; }
-QProgressBar::chunk { background: #7a9d54; border-radius: 3px; }
-QSplitter::handle { background: #dfe5de; width: 1px; }
+QProgressBar { border: none; background: $progress; border-radius: 3px; max-height: 6px; }
+QProgressBar::chunk { background: $accent; border-radius: 3px; }
+QSplitter::handle { background: $border; width: 1px; }
 QToolTip { background: #243128; color: #ffffff; padding: 6px; }
-"""
+""")
 
 
 def label(text: str, kind: str = "", wrap: bool = False) -> QLabel:
@@ -293,7 +317,6 @@ class CardMergerWindow(QMainWindow):
         self.setWindowTitle("Card Merger")
         self.resize(1120, 800)
         self.setMinimumSize(780, 640)
-        self.setStyleSheet(STYLE)
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
@@ -307,6 +330,9 @@ class CardMergerWindow(QMainWindow):
         row.addWidget(label("▥  Card Merger", "brand"))
         row.addStretch()
         row.addWidget(label("LOCAL WORKSPACE", "eyebrow"))
+        self.theme_button = button("", self.toggle_theme)
+        row.addWidget(self.theme_button)
+        self.set_theme("dark")
         self.import_button = button("Choose photo folder…", self.choose_input)
         row.addWidget(self.import_button)
         outer.addWidget(header)
@@ -336,7 +362,7 @@ class CardMergerWindow(QMainWindow):
         work.setSpacing(14)
         work.addWidget(label("REVIEW & PREPARE", "eyebrow"))
         work.addWidget(label("One card. Both sides.", "title"))
-        work.addWidget(label("Names are recognized automatically. Only unrecognized cards need a name.", "muted"))
+        work.addWidget(label("Names are recognized automatically. You can override any card name below.", "muted"))
         self.preview = QFrame()
         self.preview.setObjectName("preview")
         preview_layout = QVBoxLayout(self.preview)
@@ -373,7 +399,7 @@ class CardMergerWindow(QMainWindow):
         self.manual_naming = QWidget()
         name_row = QHBoxLayout(self.manual_naming)
         name_row.setContentsMargins(0, 0, 0, 0)
-        name_label = label("Recognition failed — enter the card name")
+        name_label = label("Card name — edit to override recognition")
         self.name = QLineEdit()
         self.name.setPlaceholderText("Enter the card name")
         name_label.setBuddy(self.name)
@@ -432,6 +458,17 @@ class CardMergerWindow(QMainWindow):
         open_action.triggered.connect(self.choose_input)
         self.addAction(open_action)
         self.refresh()
+
+    def set_theme(self, theme: str):
+        self.setStyleSheet(STYLE.substitute(THEMES[theme]))
+        self.theme = theme
+        next_theme = "light" if theme == "dark" else "dark"
+        self.theme_button.setText(f"Switch to {next_theme} mode")
+        self.theme_button.setToolTip(f"Current theme: {theme}. Switch to {next_theme} mode.")
+        self.theme_button.setAccessibleName(f"Switch to {next_theme} mode")
+
+    def toggle_theme(self):
+        self.set_theme("light" if self.theme == "dark" else "dark")
 
     @property
     def current_pair(self) -> PhotoPair | None:
@@ -542,9 +579,9 @@ class CardMergerWindow(QMainWindow):
                 f"{item_pair.name or f'Pair {item_pair.index:03d}'}\n{item_pair.status}"
             )
         self.name.setEnabled(bool(pair) and not pair.skipped)
-        self.manual_naming.setVisible(bool(pair and pair.recognition_failed))
+        self.manual_naming.setVisible(bool(pair))
         self.recognized_name.setVisible(bool(pair and not pair.recognition_failed))
-        self.recognized_name.setText(f"Recognized card: {pair.name}" if pair and pair.name else "Recognizing card name…")
+        self.recognized_name.setText(f"Card name: {pair.name}" if pair and pair.name else "Recognizing card name…")
         self.name.setToolTip(pair.recognition_error if pair else "")
         self.swap_button.setEnabled(bool(pair and pair.back))
         self.replace_button.setEnabled(bool(pair))
@@ -576,6 +613,8 @@ class CardMergerWindow(QMainWindow):
                     if pair.confirmed
                     else "Recognition failed. Enter a card name and confirm this pair."
                     if pair.recognition_failed
+                    else "Confirm this pair to use the updated card name."
+                    if pair.name
                     else "Recognizing card name…"
                 )
             )
@@ -594,7 +633,7 @@ class CardMergerWindow(QMainWindow):
         self.export_button.setEnabled(bool(pending and self.output_folder and not self.thread))
 
     def edit_name(self, text: str):
-        if (pair := self.current_pair) and pair.recognition_failed:
+        if (pair := self.current_pair) and not pair.skipped and not self.thread:
             pair.name, pair.confirmed = text, False
             pair.exported = False
             self.refresh()
